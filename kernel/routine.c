@@ -17,6 +17,9 @@ static uint8_t *gp_package_bitmap __read_mostly = nullptr;
 #define gp_bitmap_bits	10000
 #define gp_alloc_size	((gp_bitmap_bits + 7) / 8)
 
+#define MIN_APP_PROCESS_UID      10000
+#define MIN_ISOLATED_PROCESS_UID 90000
+
 static_assert(sizeof(*gp_package_bitmap) == 1);
 static_assert(PAGE_SIZE > gp_alloc_size);
 
@@ -73,7 +76,24 @@ static __always_inline bool getpriority_should_swap(int which, int who, const bo
 
 	// only filter appuid calls
 	int cuid = current_uid().val;
-	if (unlikely(cuid < 10000))
+	if (unlikely(cuid < MIN_APP_PROCESS_UID || who < MIN_APP_PROCESS_UID))
+		return false;
+
+	// convert all isolated processes to appuids
+	if (unlikely(cuid >= MIN_ISOLATED_PROCESS_UID))
+	{
+		struct user_namespace *ns = current_cred()->user_ns;
+		if (ns && ns != &init_user_ns)
+		{
+			kuid_t host_kuid = make_kuid(ns, 0);
+			if (uid_valid(host_kuid))
+			{
+				cuid = from_kuid(&init_user_ns, host_kuid);
+			}
+		}
+	}
+
+	if (likely(cuid == who))
 		return false;
 
 	// try to equalize memory load to all
@@ -85,28 +105,22 @@ static __always_inline bool getpriority_should_swap(int which, int who, const bo
 	if (is_io && which != IOPRIO_WHO_USER)
 		return false;
 
-	if (cuid == who)
-		return false;
-
-	if (who < 10000)
-		return false;
-
 	if (who >= 20000)
 		return false;
 
 //	pr_info("ksu_getpriority: caller: %d paramms: %d / %d comm: %s \n", current_uid().val, which, who, current->comm);
 
 	if (!gp_test_package_bit(who))
-		return false;
-		
+		return true;
+
 //	pr_info("getpriority: uid: %d is set! \n", who);
-	return true;
+	return false;
 }
 
 // dummy
 static uintptr_t dummy = 0x0;
 
-// native 
+// native
 #define __AARCH64_setpriority	140
 #define __AARCH64_getpriority	141
 #define __AARCH64_ioprio_set	30
@@ -421,4 +435,3 @@ static int getpriority_hook_exit(void)
 	pr_info("%s: bitmap destroyed\n", __func__);
 	return 0;
 }
-
