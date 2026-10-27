@@ -1,0 +1,70 @@
+name: Build fgetpriority
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "kernel/**"
+      - "userspace/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    name: Build kernel module
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:android15-6.6-20260828
+      options: --privileged
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile fgetpriority.ko
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -d /opt/ddk/kdir/android15-6.6
+          make -C /opt/ddk/kdir/android15-6.6 \
+            M="$GITHUB_WORKSPACE/kernel" \
+            CONFIG_FGETPRIORITY=m \
+            KCFLAGS=-Wno-error=constant-logical-operand \
+            modules
+          test -f kernel/fgetpriority.ko
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fgetpriority-ko-android15-6.6
+          path: kernel/fgetpriority.ko
+          if-no-files-found: error
+          retention-days: 14
+
+  userspace:
+    name: Build ARM64 userspace binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Compile userspace binary
+        run: |
+          set -euxo pipefail
+          make -C userspace
+          file userspace/binary
+          mkdir -p out
+          cp userspace/binary out/fgetpriority-binary
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fgetpriority-userspace-arm64
+          path: out/fgetpriority-binary
+          if-no-files-found: error
+          retention-days: 14
