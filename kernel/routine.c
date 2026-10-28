@@ -20,6 +20,8 @@ static uint8_t *gp_package_bitmap __read_mostly = nullptr;
 #define MIN_APP_PROCESS_UID      10000
 #define MIN_ISOLATED_PROCESS_UID 90000
 
+static const int AID_USER_OFFSET = 100000;
+
 static_assert(sizeof(*gp_package_bitmap) == 1);
 static_assert(PAGE_SIZE > gp_alloc_size);
 
@@ -76,8 +78,11 @@ static __always_inline bool getpriority_should_swap(int which, int who, const bo
 
 	// only filter appuid calls
 	int cuid = current_uid().val;
-	if (unlikely(cuid < MIN_APP_PROCESS_UID || who < MIN_APP_PROCESS_UID))
+	if (unlikely(cuid < MIN_APP_PROCESS_UID))
 		return false;
+
+	if (unlikely(cuid >= AID_USER_OFFSET))
+		cuid %= AID_USER_OFFSET;
 
 	// convert all isolated processes to appuids
 	if (unlikely(cuid >= MIN_ISOLATED_PROCESS_UID))
@@ -87,17 +92,21 @@ static __always_inline bool getpriority_should_swap(int which, int who, const bo
 		{
 			kuid_t host_kuid = make_kuid(ns, 0);
 			if (uid_valid(host_kuid))
-			{
 				cuid = from_kuid(&init_user_ns, host_kuid);
-			}
 		}
 	}
 
-	if (likely(cuid == who))
-		return false;
-
 	// try to equalize memory load to all
 	__builtin_prefetch(gp_package_bitmap);
+
+	if (unlikely(who < MIN_APP_PROCESS_UID))
+		return false;
+
+	if (unlikely(who >= AID_USER_OFFSET))
+	    who %= AID_USER_OFFSET;
+
+	if (likely(cuid == who))
+		return false;
 
 	if (!is_io && which != PRIO_USER)
 		return false;
